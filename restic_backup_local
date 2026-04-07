@@ -1,0 +1,54 @@
+#!/bin/bash
+PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin
+PASS_FILE="/sec/restic/resticpass"
+REPO="/tank/restic_backups"
+
+sudo -u www-data php /var/www/html/nextcloud/occ maintenance:mode --on
+cd /db
+sudo -u postgres pg_dumpall > /db/pgall.dump
+echo 'postgresql dump created'
+sudo mysqldump -p --all-databases > /db/mysqlall.dump
+echo 'mysql dump created'
+cd
+zfs snapshot rpool/root@backup_snapshot
+zfs snapshot rpool/home@backup_snapshot
+zfs snapshot tank/html@backup_snapshot
+zfs snapshot rpool/sync@backup_snapshot
+
+sudo -u www-data php /var/www/html/nextcloud/occ maintenance:mode --off
+echo 'zfs snapshot created'
+mkdir -p /brpool /bhtml /bsync /bhome
+mount -t zfs rpool/root@backup_snapshot /brpool
+mount -t zfs rpool/home@backup_snapshot /bhome
+mount -t zfs tank/html@backup_snapshot /bhtml
+mount -t zfs rpool/sync@backup_snapshot /bsync
+echo 'zfs snapshot mounted'
+cd /brpool
+restic backup . -r $REPO --verbose --password-file $PASS_FILE --exclude-file=/sec/restic/exclude
+cd
+cd /bhome
+restic backup . -r $REPO --verbose --password-file $PASS_FILE
+
+cd /bhtml
+restic backup . -r $REPO --verbose --password-file $PASS_FILE
+cd
+cd /bsync
+restic backup . -r $REPO --verbose --password-file $PASS_FILE
+cd
+
+echo 'backup completed'
+umount -r /brpool
+umount -r /bhome
+umount -r /bhtml
+umount -r /bsync
+echo 'zfs snapshot unmounted'
+zfs destroy rpool/root@backup_snapshot
+zfs destroy rpool/home@backup_snapshot
+zfs destroy tank/html@backup_snapshot
+zfs destroy rpool/sync@backup_snapshot
+echo 'zfs snapshot deleted'
+rm -fr /brpool /bhome /bhtml /bsync
+sudo restic forget --keep-last 60 --password-file $PASS_FILE --repo $REPO
+sudo restic prune --password-file $PASS_FILE --repo $REPO
+echo '***DONE***'
+exit 0
